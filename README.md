@@ -4,7 +4,7 @@ Send a photo to a LINE bot. The bot checks whether a reference label is in the p
 
 Built with Python, FastAPI, OpenCV, MongoDB Atlas and the LINE Messaging API. This is a portfolio project, built to learn how to put image analysis behind a chat interface.
 
-![Pipeline](docs/pipeline_diagram.png)
+![Pipeline](pipeline_diagram.png)
 
 ## How it works
 
@@ -26,13 +26,13 @@ This is classic computer vision (feature matching), not machine learning.
 | Unrelated labelled object | Rejected. 5 of 18 |
 
 <p>
-<img src="docs/line_match.jpg" width="260" alt="LINE reply">
-<img src="docs/green_box_result.jpg" width="330" alt="Detected box">
+<img src="line_match.jpg" width="260" alt="LINE reply">
+<img src="green_box_result.jpg" width="330" alt="Detected box">
 </p>
 
 Each result is logged in MongoDB Atlas:
 
-![MongoDB records](docs/mongo_records.png)
+![MongoDB records](mongo_records.png)
 
 ## What went wrong, and what I changed
 
