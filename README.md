@@ -65,7 +65,23 @@ uvicorn webhook:app --port 8000
 ngrok http 8000
 ```
 
-Set the ngrok URL plus `/callback` (use the route defined in `webhook.py`) as the webhook URL in the LINE Developers console.
+Set the ngrok URL plus `/webhook` as the webhook URL in the LINE Developers console.
+
+## Deploy (run 24/7)
+
+The repo includes a `Dockerfile` and a `render.yaml`, so the bot can run on [Render](https://render.com) without your laptop.
+
+1. Push this repo to GitHub.
+2. In Render, choose **New > Blueprint** and select this repo. Render reads `render.yaml`.
+3. Enter `LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET` and `MONGODB_URI` when asked.
+4. After the deploy, open `https://<your-service>.onrender.com/`. It should show `{"status":"ok"}`.
+5. In the LINE Developers console, set the webhook URL to `https://<your-service>.onrender.com/webhook`, press **Verify**, and turn on **Use webhook**.
+6. In MongoDB Atlas, go to **Network Access** and allow `0.0.0.0/0`, or the server cannot reach the database.
+
+Notes:
+- `render.yaml` uses the paid `starter` plan (about $7/month), which stays awake. The free plan sleeps after 15 minutes without traffic, so the first photo after a quiet period can take close to a minute to answer.
+- The disk is wiped on every redeploy, so the box images in `results/` do not last. The records in MongoDB do.
+- The `Dockerfile` also works on other hosts that run containers, such as Google Cloud Run, Railway or Fly.io.
 
 ## Files
 
@@ -75,9 +91,9 @@ Set the ngrok URL plus `/callback` (use the route defined in `webhook.py`) as th
 | `match.py` | Standalone ORB + RANSAC matching on two images |
 | `keypoints.py` | Draws keypoints, used to see what the matcher sees |
 | `template_card.jpg` | Reference label |
+| `Dockerfile`, `render.yaml` | Cloud deployment |
 
 ## Limits and next steps
 
-- Runs locally behind an ngrok tunnel. It is not deployed yet.
 - Next: read the label text with OCR and pass it to an LLM.
-- Next: deploy to a cloud host so the bot runs without my laptop.
+- Next: store the box images in cloud storage so they survive redeploys.

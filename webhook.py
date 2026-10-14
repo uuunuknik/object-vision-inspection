@@ -96,6 +96,11 @@ def check_match(image_bytes: bytes) -> str:
     return f"No confident match\nAgreeing points: {inliers} of {len(good)} matches"
 
 
+@app.get("/")
+def health():
+    return {"status": "ok"}
+
+
 @app.post("/webhook")
 async def webhook(request: Request):
     body = await request.body()
