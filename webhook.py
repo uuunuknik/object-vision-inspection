@@ -96,7 +96,7 @@ def check_match(image_bytes: bytes) -> str:
     return f"No confident match\nAgreeing points: {inliers} of {len(good)} matches"
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def health():
     return {"status": "ok"}
 

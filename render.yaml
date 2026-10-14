@@ -2,7 +2,7 @@ services:
   - type: web
     name: object-inspector
     runtime: docker
-    plan: starter
+    plan: free
     healthCheckPath: /
     envVars:
       - key: LINE_CHANNEL_ACCESS_TOKEN

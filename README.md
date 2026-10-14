@@ -79,7 +79,7 @@ The repo includes a `Dockerfile` and a `render.yaml`, so the bot can run on [Ren
 6. In MongoDB Atlas, go to **Network Access** and allow `0.0.0.0/0`, or the server cannot reach the database.
 
 Notes:
-- `render.yaml` uses the paid `starter` plan (about $7/month), which stays awake. The free plan sleeps after 15 minutes without traffic, so the first photo after a quiet period can take close to a minute to answer.
+- `render.yaml` uses Render's **free** plan. A free service sleeps after 15 minutes without traffic, and the first photo after that can take close to a minute. To keep it awake, create a free monitor at [UptimeRobot](https://uptimerobot.com) (type HTTP(s), URL `https://<your-service>.onrender.com/`, every 5 minutes). The free plan includes 750 hours a month, which covers one service running all month.
 - The disk is wiped on every redeploy, so the box images in `results/` do not last. The records in MongoDB do.
 - The `Dockerfile` also works on other hosts that run containers, such as Google Cloud Run, Railway or Fly.io.
 
