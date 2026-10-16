@@ -1,0 +1,59 @@
+//@version=5
+// RSI(2) Pullback for SET stocks, daily bars.
+// Buy a pullback in an uptrend, sell on the bounce, the time limit, or the ATR stop.
+// The same rules are in backtest.py, so results should line up with Strategy Tester.
+//
+// Alerts: create ONE alert on this strategy with
+//   Condition: this strategy -> "Order fills and alert() function calls"
+//   Message:   {{strategy.order.alert_message}}
+//   Webhook:   https://<your-agent>/webhook/tradingview
+strategy("RSI(2) Pullback", overlay=true,
+     initial_capital=100000,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+     commission_type=strategy.commission.percent, commission_value=0.15,
+     pyramiding=0)
+
+rsiLen   = input.int(2, "RSI length", minval=1)
+rsiEntry = input.float(10, "Buy when RSI below")
+trendLen = input.int(200, "Trend EMA (close must be above)")
+exitLen  = input.int(5, "Exit EMA (sell when close above)")
+maxBars  = input.int(10, "Max bars in trade")
+atrLen   = input.int(14, "ATR length")
+atrMult  = input.float(3.0, "Stop loss = entry - ATR x")
+secret   = input.string("change-me", "Webhook secret (same as TV_SECRET in agent)")
+
+rsi      = ta.rsi(close, rsiLen)
+emaTrend = ta.ema(close, trendLen)
+emaExit  = ta.ema(close, exitLen)
+atr      = ta.atr(atrLen)
+
+plot(emaTrend, "EMA trend", color=color.orange)
+plot(emaExit, "EMA exit", color=color.teal)
+
+alertMsg(action, price, reason) =>
+    t = str.tostring(time)
+    '{"secret":"' + secret + '","action":"' + action + '","symbol":"' + syminfo.ticker +
+     '","price":' + str.tostring(price, "#.####") + ',"rsi":' + str.tostring(nz(rsi), "#.##") +
+     ',"reason":"' + reason + '","time":"' + t + '","id":"' + syminfo.ticker + "-" + action + "-" + reason + "-" + t + '"}'
+
+inPos = strategy.position_size > 0
+var float entryAtr = na
+
+buyCond = not inPos and not na(emaTrend) and not na(rsi) and not na(atr) and close > emaTrend and rsi < rsiEntry
+if buyCond
+    entryAtr := atr
+    strategy.entry("Long", strategy.long, alert_message=alertMsg("BUY", close, "rsi_pullback"))
+
+// The stop is entry - ATR x mult. Before the fill we only know the signal close,
+// so the fill bar uses that estimate; from the next bar on it uses the real fill price.
+if buyCond or inPos
+    basePrice = inPos ? strategy.position_avg_price : close
+    stopPrice = basePrice - entryAtr * atrMult
+    strategy.exit("SL", "Long", stop=stopPrice, alert_message=alertMsg("SELL", stopPrice, "stop_loss"))
+
+if inPos
+    barsHeld = bar_index - strategy.opentrades.entry_bar_index(0)
+    if close > emaExit
+        strategy.close("Long", comment="target", alert_message=alertMsg("SELL", close, "target"))
+    else if barsHeld >= maxBars
+        strategy.close("Long", comment="time", alert_message=alertMsg("SELL", close, "time_exit"))
