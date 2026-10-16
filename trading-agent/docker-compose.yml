@@ -1,0 +1,24 @@
+services:
+  agent:
+    build: .
+    env_file: .env
+    volumes:
+      - ./data:/data          # SQLite lives here, survives restarts and rebuilds
+    restart: unless-stopped
+
+  caddy:                      # HTTPS on 443 (TradingView only calls ports 80/443)
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - agent
+    restart: unless-stopped
+
+volumes:
+  caddy_data:

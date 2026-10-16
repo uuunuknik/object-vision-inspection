@@ -1,2 +1,4 @@
 agent.db
 trades_*.csv
+.env
+data/

@@ -4,6 +4,7 @@ Every signal is stored in SQLite with the decision (executed / skipped / rejecte
 and the reason, so you can always look back at why the agent did what it did.
 
 Run:  uvicorn agent:app --port 8000
+Test the LINE connection:  python agent.py test-line
 """
 
 import hashlib
@@ -12,7 +13,9 @@ import json
 import math
 import os
 import sqlite3
+import sys
 import threading
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -20,6 +23,8 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
+
+import notify
 
 # Settings. Override with environment variables; TV_SECRET must match the Pine input.
 TV_SECRET = os.getenv("TV_SECRET", "change-me")
@@ -29,6 +34,7 @@ MAX_ENTRY_RSI = float(os.getenv("MAX_ENTRY_RSI", "75"))
 TRADE_SIZE_THB = float(os.getenv("TRADE_SIZE_THB", "100000"))  # money per new position
 LOT_SIZE = int(os.getenv("LOT_SIZE", "100"))  # SET board lot
 COMMISSION = float(os.getenv("COMMISSION", "0.0015"))  # per side, 0.15%
+VIEW_KEY = os.getenv("VIEW_KEY", "")  # if set, GET endpoints need ?key=VIEW_KEY
 
 
 def now_iso():
@@ -231,7 +237,51 @@ def handle(conn, sig: Signal):
 
 # ---------- API ----------
 
-app = FastAPI(title="TradingView trading agent")
+def compute_stats(conn):
+    trades = [dict(r) for r in conn.execute("SELECT * FROM trades ORDER BY id").fetchall()]
+    wins = [t for t in trades if t["net_pnl"] > 0]
+    gross_win = sum(t["net_pnl"] for t in wins)
+    gross_loss = -sum(t["net_pnl"] for t in trades if t["net_pnl"] <= 0)
+    n = len(trades)
+    return {
+        "closed_trades": n,
+        "win_rate": round(len(wins) / n * 100, 2) if n else None,
+        "net_pnl_thb": round(sum(t["net_pnl"] for t in trades), 2),
+        "expectancy_pct": round(sum(t["return_pct"] for t in trades) / n, 4) if n else None,
+        "profit_factor": round(gross_win / gross_loss, 3) if gross_loss else None,
+    }, trades
+
+
+def current_stats():
+    with db() as conn:
+        return compute_stats(conn)[0]
+
+
+def current_positions():
+    with db() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM positions ORDER BY opened_at").fetchall()]
+
+
+def trade_message(sig: Signal, reason: str) -> str:
+    if sig.action == "BUY":
+        return f"🟢 ซื้อ {sig.symbol} (paper)\n{reason}\nถืออยู่ {len(current_positions())}/{MAX_POSITIONS} ตัว"
+    return f"🔴 ขาย {sig.symbol} [{sig.reason or '-'}] (paper)\n{reason}\n\n{notify.fmt_stats(current_stats())}"
+
+
+def check_key(key: Optional[str]):
+    if VIEW_KEY and not hmac.compare_digest((key or "").encode(), VIEW_KEY.encode()):
+        raise HTTPException(401, "missing or wrong key")
+
+
+@asynccontextmanager
+async def lifespan(app):
+    stop = notify.start_daily_summary(current_stats, current_positions)
+    yield
+    if stop:
+        stop.set()
+
+
+app = FastAPI(title="TradingView trading agent", lifespan=lifespan)
 init_db()
 
 
@@ -253,18 +303,25 @@ async def webhook(request: Request):
     with _lock, db() as conn:
         decision, reason = handle(conn, sig)
         record(conn, decision, reason, sig)
+    if decision == "executed":
+        notify.push_async(trade_message(sig, reason))
     return {"decision": decision, "reason": reason, "symbol": sig.symbol, "action": sig.action}
 
 
+@app.get("/health")
+def health():
+    return {"ok": True, "line": notify.enabled()}
+
+
 @app.get("/positions")
-def positions():
-    with db() as conn:
-        rows = conn.execute("SELECT * FROM positions ORDER BY opened_at").fetchall()
-    return [dict(r) for r in rows]
+def positions(key: Optional[str] = None):
+    check_key(key)
+    return current_positions()
 
 
 @app.get("/signals")
-def signals(limit: int = 100):
+def signals(limit: int = 100, key: Optional[str] = None):
+    check_key(key)
     with db() as conn:
         rows = conn.execute(
             "SELECT id, signal_id, received_at, symbol, action, price, rsi, reason,"
@@ -275,18 +332,16 @@ def signals(limit: int = 100):
 
 
 @app.get("/pnl")
-def pnl():
+def pnl(key: Optional[str] = None):
+    check_key(key)
     with db() as conn:
-        trades = [dict(r) for r in conn.execute("SELECT * FROM trades ORDER BY id").fetchall()]
-    wins = [t for t in trades if t["net_pnl"] > 0]
-    gross_win = sum(t["net_pnl"] for t in wins)
-    gross_loss = -sum(t["net_pnl"] for t in trades if t["net_pnl"] <= 0)
-    n = len(trades)
-    return JSONResponse({
-        "closed_trades": n,
-        "win_rate": round(len(wins) / n * 100, 2) if n else None,
-        "net_pnl_thb": round(sum(t["net_pnl"] for t in trades), 2),
-        "expectancy_pct": round(sum(t["return_pct"] for t in trades) / n, 4) if n else None,
-        "profit_factor": round(gross_win / gross_loss, 3) if gross_loss else None,
-        "trades": trades,
-    })
+        stats, trades = compute_stats(conn)
+    return JSONResponse({**stats, "trades": trades})
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["test-line"]:
+        ok = notify.push("✅ ทดสอบจาก trading agent\n" + notify.fmt_stats(current_stats()))
+        print("sent" if ok else "not sent (check LINE_CHANNEL_ACCESS_TOKEN / LINE_USER_ID)")
+    else:
+        print("usage: python agent.py test-line")

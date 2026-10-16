@@ -17,6 +17,8 @@ strategy.pine ──alert JSON──▶ agent.py ──ผ่าน──▶ Pap
 | `strategy.pine` | กลยุทธ์ RSI(2) Pullback ส่ง alert เป็น JSON ตอน BUY/SELL | Pine Editor ใน TradingView |
 | `agent.py` | FastAPI รับ webhook, เช็ค secret, กัน alert ซ้ำ, จำกัดจำนวนหุ้นที่ถือ, บันทึก SQLite, ส่งคำสั่ง (paper) | เครื่องเรา/เซิร์ฟเวอร์ |
 | `backtest.py` | ทดสอบกลยุทธ์เดียวกันกับราคาย้อนหลัง (Yahoo หรือ CSV จาก TradingView) | เครื่องเรา |
+| `notify.py` | ส่งข้อความ LINE ตอนซื้อ/ขาย, เตือน win rate และสรุปรายวัน | อยู่ใน agent |
+| `Dockerfile`, `docker-compose.yml`, `Caddyfile` | ขึ้นเซิร์ฟเวอร์พร้อม HTTPS | VPS |
 | `tests/` | เทสต์ของ agent และ backtest (`pytest`) | เครื่องเรา |
 
 ## กลยุทธ์ RSI(2) Pullback
@@ -45,6 +47,12 @@ Indicator ใน backtest.py คำนวณแบบเดียวกับ `t
 | `LOT_SIZE` | `100` | board lot ของ SET |
 | `COMMISSION` | `0.0015` | ค่าธรรมเนียมต่อข้าง |
 | `DB_PATH` | `agent.db` | ไฟล์ SQLite |
+| `VIEW_KEY` | (ว่าง) | ถ้าตั้งไว้ ต้องใส่ `?key=...` ถึงจะดู `/positions` `/signals` `/pnl` ได้ (ควรตั้งเมื่อขึ้นเซิร์ฟเวอร์) |
+| `LINE_CHANNEL_ACCESS_TOKEN` | (ว่าง) | token ของ LINE bot (ใช้ตัวเดียวกับโปรเจกต์ LINE bot เดิมได้) |
+| `LINE_USER_ID` | (ว่าง) | LINE user ID ของคนที่จะรับข้อความ |
+| `WINRATE_ALERT` | `50` | เตือนใน LINE ถ้า win rate ต่ำกว่านี้ |
+| `WINRATE_MIN_TRADES` | `5` | เริ่มเตือนหลังปิดไม้ครบเท่านี้ (น้อยกว่านี้ยังสรุปอะไรไม่ได้) |
+| `DAILY_SUMMARY_AT` | `17:30` | เวลาส่งสรุปรายวัน (เวลาไทย, จันทร์–ศุกร์) ใส่ว่างเพื่อปิด |
 
 กฎที่ agent ใช้:
 - secret ผิด → ตอบ 401 และบันทึกเป็น `rejected`
@@ -57,6 +65,58 @@ Endpoint:
 - `GET /positions` หุ้นที่ถืออยู่
 - `GET /signals?limit=100` ประวัติ signal และเหตุผลที่ทำ/ข้าม
 - `GET /pnl` กำไรที่ปิดแล้ว, win rate, expectancy, profit factor
+- `GET /health` เช็คว่า agent ทำงานอยู่และต่อ LINE แล้วหรือยัง
+
+## แจ้งเตือนทาง LINE
+
+agent ส่งข้อความเข้า LINE ให้:
+- **ทุกครั้งที่ซื้อ/ขาย** — ตอนขายจะแนบสรุป win rate, expectancy, profit factor, กำไรรวม
+- **สรุปรายวัน** จันทร์–ศุกร์ 17:30 (หลังตลาดปิด) พร้อมหุ้นที่ถืออยู่
+- **⚠️ เตือน** เมื่อ win rate ต่ำกว่า 50% หรือ expectancy ไม่เป็นบวก (หลังปิดครบ 5 ไม้)
+
+ตัวอย่างข้อความตอนขาย:
+```
+🔴 ขาย PTT [target] (paper)
+sold 3000 @ 34.5 via paper, net 3445.12 THB
+
+ปิดแล้ว 12 ไม้ | win rate 58.3%
+expectancy +0.41% ต่อไม้ | profit factor 1.35
+กำไรสุทธิรวม +14,820.50 บาท
+```
+
+ตั้งค่า (ใช้ LINE Messaging API เพราะ LINE Notify ปิดบริการไปแล้ว):
+1. ใช้ channel ของ LINE bot เดิม หรือสร้างใหม่ที่ [LINE Developers](https://developers.line.biz/console/)
+2. แท็บ **Messaging API** → ออก **Channel access token (long-lived)** → ใส่ `LINE_CHANNEL_ACCESS_TOKEN`
+3. แท็บ **Basic settings** → คัดลอก **Your user ID** (ขึ้นต้นด้วย `U`) → ใส่ `LINE_USER_ID`
+4. แอด bot เป็นเพื่อนใน LINE (สแกน QR ในแท็บ Messaging API)
+5. ทดสอบ: `python agent.py test-line` ควรได้ข้อความ "✅ ทดสอบจาก trading agent"
+
+push message มีโควต้าฟรีต่อเดือนจำกัด ดูได้ใน LINE Official Account Manager
+ระบบนี้ส่งราวๆ 20–60 ข้อความต่อเดือน (สรุปรายวัน ~22 + ตามจำนวนไม้) ถ้า LINE ส่งไม่ได้ agent ยังเทรดต่อตามปกติ
+
+## ขึ้นเซิร์ฟเวอร์ (Docker)
+
+TradingView ส่ง webhook ได้เฉพาะพอร์ต 80/443 จึงใช้ Caddy ทำ HTTPS ให้อัตโนมัติ
+
+สิ่งที่ต้องมี:
+- VPS ที่เปิดตลอด เช่น DigitalOcean, Vultr, Oracle Cloud (Free tier), AWS Lightsail ลง Docker ไว้
+  (บริการฟรีที่ "หลับ" เมื่อไม่มีคนเรียก เช่น Render free ไม่เหมาะ เพราะสรุปรายวันจะไม่ส่ง และไฟล์ SQLite หาย)
+- โดเมนที่ชี้มาที่ IP ของเซิร์ฟเวอร์ (ใช้ของฟรีอย่าง DuckDNS ได้)
+
+```bash
+git clone <repo> && cd <repo>/trading-agent
+cp .env.example .env        # แก้ DOMAIN, TV_SECRET, VIEW_KEY, LINE_* ให้ครบ
+docker compose up -d --build
+docker compose exec agent python agent.py test-line   # ทดสอบ LINE
+curl https://<DOMAIN>/health
+```
+
+- Webhook URL ใน TradingView: `https://<DOMAIN>/webhook/tradingview`
+- ดูผล: `https://<DOMAIN>/pnl?key=<VIEW_KEY>`
+- ข้อมูลอยู่ใน `./data/agent.db` บนเซิร์ฟเวอร์ (restart/อัปเดตแล้วไม่หาย) ควร backup เป็นระยะ
+- ดู log: `docker compose logs -f agent`
+- อัปเดตโค้ด: `git pull && docker compose up -d --build`
+- รันแค่ 1 worker (ตั้งไว้แล้วใน Dockerfile) เพราะการเช็คความเสี่ยงและสรุปรายวันต้องอยู่ใน process เดียว
 
 ## Backtest
 
@@ -89,11 +149,11 @@ python backtest.py PTT.BK --optimize
 2. รัน `python backtest.py` กับหุ้นที่สนใจ 3–5 ตัว ดู expectancy, profit factor, buy_hold
 3. วาง `strategy.pine` ใน TradingView (กราฟ Daily) แล้วเทียบผลใน Strategy Tester
 4. ตั้ง secret ให้ตรงกัน: ใส่ในช่อง "Webhook secret" ของ Pine และ `export TV_SECRET=...`
-5. รัน agent: `uvicorn agent:app --port 8000` แล้วเปิดให้เข้าถึงจากภายนอกด้วย `ngrok http 8000`
+5. รัน agent: ทดลองบนเครื่องด้วย `uvicorn agent:app --port 8000` + `ngrok http 8000` หรือขึ้นเซิร์ฟเวอร์ตามหัวข้อ "ขึ้นเซิร์ฟเวอร์"
 6. สร้าง Alert ใน TradingView:
    - Condition: เลือก strategy นี้ → "Order fills and alert() function calls"
    - Message: `{{strategy.order.alert_message}}`
-   - Webhook URL: `https://<ngrok-url>/webhook/tradingview`
+   - Webhook URL: `https://<ngrok-url หรือ DOMAIN>/webhook/tradingview`
    - ต้องสร้าง alert แยกต่อหุ้น 1 ตัว (หรือใช้ watchlist alert ถ้าแพ็กเกจรองรับ)
 7. ดูผลที่ `/signals`, `/positions`, `/pnl`
 8. Paper trade อย่างน้อย 1–2 เดือน
