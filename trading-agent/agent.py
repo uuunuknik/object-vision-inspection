@@ -31,7 +31,7 @@ TV_SECRET = os.getenv("TV_SECRET", "change-me")
 DB_PATH = os.getenv("DB_PATH", "agent.db")
 MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "5"))
 MAX_ENTRY_RSI = float(os.getenv("MAX_ENTRY_RSI", "75"))
-TRADE_SIZE_THB = float(os.getenv("TRADE_SIZE_THB", "100000"))  # money per new position
+TRADE_SIZE_THB = float(os.getenv("TRADE_SIZE_THB", "10000"))  # money per new position
 LOT_SIZE = int(os.getenv("LOT_SIZE", "100"))  # SET board lot
 COMMISSION = float(os.getenv("COMMISSION", "0.0015"))  # per side, 0.15%
 VIEW_KEY = os.getenv("VIEW_KEY", "")  # if set, GET endpoints need ?key=VIEW_KEY
@@ -239,6 +239,10 @@ def handle(conn, sig: Signal):
 
 def compute_stats(conn):
     trades = [dict(r) for r in conn.execute("SELECT * FROM trades ORDER BY id").fetchall()]
+    return stats_of(trades), trades
+
+
+def stats_of(trades):
     wins = [t for t in trades if t["net_pnl"] > 0]
     gross_win = sum(t["net_pnl"] for t in wins)
     gross_loss = -sum(t["net_pnl"] for t in trades if t["net_pnl"] <= 0)
@@ -249,7 +253,7 @@ def compute_stats(conn):
         "net_pnl_thb": round(sum(t["net_pnl"] for t in trades), 2),
         "expectancy_pct": round(sum(t["return_pct"] for t in trades) / n, 4) if n else None,
         "profit_factor": round(gross_win / gross_loss, 3) if gross_loss else None,
-    }, trades
+    }
 
 
 def current_stats():
@@ -265,7 +269,10 @@ def current_positions():
 def trade_message(sig: Signal, reason: str) -> str:
     if sig.action == "BUY":
         return f"🟢 ซื้อ {sig.symbol} (paper)\n{reason}\nถืออยู่ {len(current_positions())}/{MAX_POSITIONS} ตัว"
-    return f"🔴 ขาย {sig.symbol} [{sig.reason or '-'}] (paper)\n{reason}\n\n{notify.fmt_stats(current_stats())}"
+    with db() as conn:
+        after, trades = compute_stats(conn)
+    headline = notify.winrate_alert(stats_of(trades[:-1]), after)
+    return f"{headline}🔴 ขาย {sig.symbol} [{sig.reason or '-'}] (paper)\n{reason}\n\n{notify.fmt_stats(after)}"
 
 
 def check_key(key: Optional[str]):
@@ -300,11 +307,14 @@ async def webhook(request: Request):
             record(conn, "rejected", "wrong secret", sig)
         raise HTTPException(401, "wrong secret")
 
-    with _lock, db() as conn:
-        decision, reason = handle(conn, sig)
-        record(conn, decision, reason, sig)
-    if decision == "executed":
-        notify.push_async(trade_message(sig, reason))
+    with _lock:
+        with db() as conn:
+            decision, reason = handle(conn, sig)
+            record(conn, decision, reason, sig)
+        # build the message under the lock so "before/after" win rate belongs to this trade
+        message = trade_message(sig, reason) if decision == "executed" else None
+    if message:
+        notify.push_async(message)
     return {"decision": decision, "reason": reason, "symbol": sig.symbol, "action": sig.action}
 
 

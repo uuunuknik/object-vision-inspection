@@ -18,7 +18,8 @@ strategy.pine ──alert JSON──▶ agent.py ──ผ่าน──▶ Pap
 | `agent.py` | FastAPI รับ webhook, เช็ค secret, กัน alert ซ้ำ, จำกัดจำนวนหุ้นที่ถือ, บันทึก SQLite, ส่งคำสั่ง (paper) | เครื่องเรา/เซิร์ฟเวอร์ |
 | `backtest.py` | ทดสอบกลยุทธ์เดียวกันกับราคาย้อนหลัง (Yahoo หรือ CSV จาก TradingView) | เครื่องเรา |
 | `notify.py` | ส่งข้อความ LINE ตอนซื้อ/ขาย, เตือน win rate และสรุปรายวัน | อยู่ใน agent |
-| `Dockerfile`, `docker-compose.yml`, `Caddyfile` | ขึ้นเซิร์ฟเวอร์พร้อม HTTPS | VPS |
+| `Dockerfile`, `docker-compose.home.yml` | รันตลอดเวลาโดยไม่ต้องมี VPS (ผ่าน ngrok) | คอมที่เปิดทิ้งไว้ |
+| `docker-compose.yml`, `Caddyfile` | ขึ้น VPS พร้อม HTTPS ด้วยโดเมนของเราเอง | VPS |
 | `tests/` | เทสต์ของ agent และ backtest (`pytest`) | เครื่องเรา |
 
 ## กลยุทธ์ RSI(2) Pullback
@@ -43,15 +44,15 @@ Indicator ใน backtest.py คำนวณแบบเดียวกับ `t
 | `TV_SECRET` | `change-me` | ต้องตรงกับช่อง "Webhook secret" ใน Pine |
 | `MAX_POSITIONS` | `5` | ถือได้สูงสุดกี่ตัวพร้อมกัน |
 | `MAX_ENTRY_RSI` | `75` | ข้ามสัญญาณซื้อถ้า RSI ที่ส่งมาสูงกว่านี้ |
-| `TRADE_SIZE_THB` | `100000` | เงินต่อการซื้อ 1 ครั้ง (ปัดลงเป็น lot ละ 100 หุ้น) |
+| `TRADE_SIZE_THB` | `10000` | เงินต่อการซื้อ 1 ครั้ง (ปัดลงเป็น lot ละ 100 หุ้น) หุ้นราคาเกิน ~99.85 บาทจะซื้อไม่ได้แม้ 1 lot และถูกข้าม |
 | `LOT_SIZE` | `100` | board lot ของ SET |
 | `COMMISSION` | `0.0015` | ค่าธรรมเนียมต่อข้าง |
 | `DB_PATH` | `agent.db` | ไฟล์ SQLite |
 | `VIEW_KEY` | (ว่าง) | ถ้าตั้งไว้ ต้องใส่ `?key=...` ถึงจะดู `/positions` `/signals` `/pnl` ได้ (ควรตั้งเมื่อขึ้นเซิร์ฟเวอร์) |
 | `LINE_CHANNEL_ACCESS_TOKEN` | (ว่าง) | token ของ LINE bot (ใช้ตัวเดียวกับโปรเจกต์ LINE bot เดิมได้) |
 | `LINE_USER_ID` | (ว่าง) | LINE user ID ของคนที่จะรับข้อความ |
-| `WINRATE_ALERT` | `50` | เตือนใน LINE ถ้า win rate ต่ำกว่านี้ |
-| `WINRATE_MIN_TRADES` | `5` | เริ่มเตือนหลังปิดไม้ครบเท่านี้ (น้อยกว่านี้ยังสรุปอะไรไม่ได้) |
+| `WINRATE_ALERT` | `50` | แจ้งใน LINE เมื่อ win rate ขึ้นไปเกินค่านี้ |
+| `WINRATE_MIN_TRADES` | `5` | เริ่มแจ้งหลังปิดไม้ครบเท่านี้ (น้อยกว่านี้ยังสรุปอะไรไม่ได้) |
 | `DAILY_SUMMARY_AT` | `17:30` | เวลาส่งสรุปรายวัน (เวลาไทย, จันทร์–ศุกร์) ใส่ว่างเพื่อปิด |
 
 กฎที่ agent ใช้:
@@ -72,16 +73,21 @@ Endpoint:
 agent ส่งข้อความเข้า LINE ให้:
 - **ทุกครั้งที่ซื้อ/ขาย** — ตอนขายจะแนบสรุป win rate, expectancy, profit factor, กำไรรวม
 - **สรุปรายวัน** จันทร์–ศุกร์ 17:30 (หลังตลาดปิด) พร้อมหุ้นที่ถืออยู่
-- **⚠️ เตือน** เมื่อ win rate ต่ำกว่า 50% หรือ expectancy ไม่เป็นบวก (หลังปิดครบ 5 ไม้)
+- **🎉 แจ้งเมื่อ win rate เกิน 50%** — ส่งครั้งเดียวตอนที่ไม้ล่าสุดทำให้ win rate ขึ้นไปเกิน 50% (ต้องปิดครบ 5 ไม้ก่อน)
+  ถ้าภายหลังตกลงมาไม่เกิน 50% แล้วขึ้นไปใหม่ จะแจ้งอีกครั้ง ระหว่างที่ยังเกินอยู่ทุกสรุปจะมีบรรทัด ✅
+- **⚠️ เตือน** ถ้า expectancy ไม่เป็นบวก เพราะ win rate เกิน 50% แต่ยังขาดทุนได้ (ดูหัวข้อ "อ่านผลยังไง")
 
-ตัวอย่างข้อความตอนขาย:
+ตัวอย่างข้อความตอนขายไม้ที่ทำให้ win rate เกิน 50%:
 ```
-🔴 ขาย PTT [target] (paper)
-sold 3000 @ 34.5 via paper, net 3445.12 THB
+🎉 win rate เกิน 50% แล้ว (54.5% จาก 11 ไม้)
 
-ปิดแล้ว 12 ไม้ | win rate 58.3%
+🔴 ขาย PTT [target] (paper)
+sold 300 @ 34.5 via paper, net 343.51 THB
+
+ปิดแล้ว 11 ไม้ | win rate 54.5%
 expectancy +0.41% ต่อไม้ | profit factor 1.35
-กำไรสุทธิรวม +14,820.50 บาท
+กำไรสุทธิรวม +452.10 บาท
+✅ win rate เกิน 50%
 ```
 
 ตั้งค่า (ใช้ LINE Messaging API เพราะ LINE Notify ปิดบริการไปแล้ว):
@@ -94,14 +100,40 @@ expectancy +0.41% ต่อไม้ | profit factor 1.35
 push message มีโควต้าฟรีต่อเดือนจำกัด ดูได้ใน LINE Official Account Manager
 ระบบนี้ส่งราวๆ 20–60 ข้อความต่อเดือน (สรุปรายวัน ~22 + ตามจำนวนไม้) ถ้า LINE ส่งไม่ได้ agent ยังเทรดต่อตามปกติ
 
-## ขึ้นเซิร์ฟเวอร์ (Docker)
+## รันให้ทำงานตลอดเวลา
 
-TradingView ส่ง webhook ได้เฉพาะพอร์ต 80/443 จึงใช้ Caddy ทำ HTTPS ให้อัตโนมัติ
+TradingView ส่ง webhook ได้เฉพาะ URL https พอร์ต 443 (หรือ 80) และต้องมีเครื่องที่รัน agent อยู่ตลอดเวลาตลาดเปิด
+เลือกได้ 2 แบบ ทั้งสองแบบใช้ Docker และไฟล์ `.env` เดียวกัน
 
-สิ่งที่ต้องมี:
-- VPS ที่เปิดตลอด เช่น DigitalOcean, Vultr, Oracle Cloud (Free tier), AWS Lightsail ลง Docker ไว้
-  (บริการฟรีที่ "หลับ" เมื่อไม่มีคนเรียก เช่น Render free ไม่เหมาะ เพราะสรุปรายวันจะไม่ส่ง และไฟล์ SQLite หาย)
-- โดเมนที่ชี้มาที่ IP ของเซิร์ฟเวอร์ (ใช้ของฟรีอย่าง DuckDNS ได้)
+| | แบบ A: ไม่มี VPS (ngrok) | แบบ B: VPS + โดเมน |
+|---|---|---|
+| เครื่อง | คอม/โน้ตบุ๊ก/มินิพีซีที่เปิดทิ้งไว้ | VPS (DigitalOcean, Vultr, Lightsail, Oracle Cloud ฯลฯ) |
+| ค่าใช้จ่าย | ฟรี (ค่าไฟ) | ฟรีถึงราวๆ 150–250 บาท/เดือน แล้วแต่เจ้า |
+| URL | โดเมน ngrok ฟรี 1 ชื่อ (ไม่เปลี่ยน) | โดเมนของเรา (DuckDNS ฟรีได้) |
+| ข้อเสีย | เครื่องดับ/เน็ตหลุด/sleep = พลาด alert | ต้องดูแลเซิร์ฟเวอร์เอง |
+
+เริ่มจากแบบ A ระหว่าง paper trade ได้ แล้วย้ายไปแบบ B ก่อนใช้เงินจริง (ย้ายแค่โฟลเดอร์ `data/`)
+เงื่อนไขฟรีของ ngrok / Oracle Cloud เปลี่ยนได้ ตรวจสอบหน้าเว็บของผู้ให้บริการอีกครั้ง
+
+### แบบ A: ไม่มี VPS (ngrok)
+
+1. ลง [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/Mac) หรือ Docker (Linux)
+2. สมัคร [ngrok](https://dashboard.ngrok.com/) ฟรี → คัดลอก **Authtoken** และไปที่ **Domains** รับโดเมนฟรี 1 ชื่อ (เช่น `xxx.ngrok-free.app`)
+3. ตั้งค่าและรัน:
+   ```bash
+   git clone <repo> && cd <repo>/trading-agent
+   cp .env.example .env    # ใส่ NGROK_AUTHTOKEN, NGROK_DOMAIN, TV_SECRET, VIEW_KEY, LINE_*
+   docker compose -f docker-compose.home.yml up -d --build
+   docker compose -f docker-compose.home.yml exec agent python agent.py test-line
+   ```
+4. Webhook URL ใน TradingView: `https://<NGROK_DOMAIN>/webhook/tradingview`
+5. ดูผล: `https://<NGROK_DOMAIN>/pnl?key=<VIEW_KEY>`
+6. ตั้งเครื่องไม่ให้ sleep และให้ Docker เปิดเองตอนบูต (Docker Desktop → Settings → "Start Docker Desktop when you sign in")
+
+### แบบ B: VPS + โดเมน (Caddy ทำ HTTPS ให้)
+
+สิ่งที่ต้องมี: VPS ที่ลง Docker แล้ว และโดเมนที่ชี้มาที่ IP ของ VPS
+(บริการฟรีที่ "หลับ" เมื่อไม่มีคนเรียก เช่น Render free ไม่เหมาะ เพราะ alert อาจหาย สรุปรายวันไม่ส่ง และไฟล์ SQLite หาย)
 
 ```bash
 git clone <repo> && cd <repo>/trading-agent
@@ -113,8 +145,11 @@ curl https://<DOMAIN>/health
 
 - Webhook URL ใน TradingView: `https://<DOMAIN>/webhook/tradingview`
 - ดูผล: `https://<DOMAIN>/pnl?key=<VIEW_KEY>`
+
+### ทั้งสองแบบ
+
 - ข้อมูลอยู่ใน `./data/agent.db` บนเซิร์ฟเวอร์ (restart/อัปเดตแล้วไม่หาย) ควร backup เป็นระยะ
-- ดู log: `docker compose logs -f agent`
+- ดู log: `docker compose logs -f agent` (แบบ A เติม `-f docker-compose.home.yml` หลัง `compose`)
 - อัปเดตโค้ด: `git pull && docker compose up -d --build`
 - รันแค่ 1 worker (ตั้งไว้แล้วใน Dockerfile) เพราะการเช็คความเสี่ยงและสรุปรายวันต้องอยู่ใน process เดียว
 
@@ -149,7 +184,7 @@ python backtest.py PTT.BK --optimize
 2. รัน `python backtest.py` กับหุ้นที่สนใจ 3–5 ตัว ดู expectancy, profit factor, buy_hold
 3. วาง `strategy.pine` ใน TradingView (กราฟ Daily) แล้วเทียบผลใน Strategy Tester
 4. ตั้ง secret ให้ตรงกัน: ใส่ในช่อง "Webhook secret" ของ Pine และ `export TV_SECRET=...`
-5. รัน agent: ทดลองบนเครื่องด้วย `uvicorn agent:app --port 8000` + `ngrok http 8000` หรือขึ้นเซิร์ฟเวอร์ตามหัวข้อ "ขึ้นเซิร์ฟเวอร์"
+5. รัน agent ตามหัวข้อ "รันให้ทำงานตลอดเวลา" (ไม่มี VPS ใช้แบบ A)
 6. สร้าง Alert ใน TradingView:
    - Condition: เลือก strategy นี้ → "Order fills and alert() function calls"
    - Message: `{{strategy.order.alert_message}}`

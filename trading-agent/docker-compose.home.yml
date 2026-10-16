@@ -1,0 +1,19 @@
+# For running without a VPS or your own domain (home PC, mini PC, any machine that stays on).
+# ngrok gives a free static https URL, so the TradingView webhook URL never changes.
+#   docker compose -f docker-compose.home.yml up -d --build
+services:
+  agent:
+    build: .
+    env_file: .env
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    command: ["http", "agent:8000", "--url=${NGROK_DOMAIN}"]
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    depends_on:
+      - agent
+    restart: unless-stopped

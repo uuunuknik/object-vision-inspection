@@ -15,8 +15,8 @@ from zoneinfo import ZoneInfo
 
 LINE_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_USER_ID = os.getenv("LINE_USER_ID", "")
-WINRATE_ALERT = float(os.getenv("WINRATE_ALERT", "50"))  # warn when win rate is below this
-WINRATE_MIN_TRADES = int(os.getenv("WINRATE_MIN_TRADES", "5"))  # ...after at least this many trades
+WINRATE_ALERT = float(os.getenv("WINRATE_ALERT", "50"))  # alert when win rate goes above this
+WINRATE_MIN_TRADES = int(os.getenv("WINRATE_MIN_TRADES", "5"))  # ...with at least this many closed trades
 DAILY_SUMMARY_AT = os.getenv("DAILY_SUMMARY_AT", "17:30")  # Bangkok time, after SET closes; "" = off
 BANGKOK = ZoneInfo("Asia/Bangkok")
 
@@ -56,11 +56,22 @@ def fmt_stats(s: dict) -> str:
         f"expectancy {s['expectancy_pct']:+.2f}% ต่อไม้ | profit factor {pf if pf is not None else '-'}",
         f"กำไรสุทธิรวม {s['net_pnl_thb']:+,.2f} บาท",
     ]
-    if s["closed_trades"] >= WINRATE_MIN_TRADES and s["win_rate"] < WINRATE_ALERT:
-        lines.append(f"⚠️ win rate ต่ำกว่า {WINRATE_ALERT:g}%")
+    if winrate_above(s):
+        lines.append(f"✅ win rate เกิน {WINRATE_ALERT:g}%")
     if s["expectancy_pct"] <= 0 and s["closed_trades"] >= WINRATE_MIN_TRADES:
         lines.append("⚠️ expectancy ไม่เป็นบวก = ยังไม่ได้กำไรจริง")
     return "\n".join(lines)
+
+
+def winrate_above(s: dict) -> bool:
+    return s["closed_trades"] >= WINRATE_MIN_TRADES and s["win_rate"] > WINRATE_ALERT
+
+
+def winrate_alert(before: dict, after: dict) -> str:
+    """Headline for the trade that pushed win rate above WINRATE_ALERT, else ""."""
+    if winrate_above(after) and not winrate_above(before):
+        return f"🎉 win rate เกิน {WINRATE_ALERT:g}% แล้ว ({after['win_rate']:.1f}% จาก {after['closed_trades']} ไม้)\n\n"
+    return ""
 
 
 def daily_message(stats: dict, positions: list) -> str:

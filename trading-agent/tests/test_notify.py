@@ -55,10 +55,28 @@ def stats(n, win_rate, expectancy):
             "profit_factor": 1.1, "net_pnl_thb": 100.0}
 
 
-def test_warns_when_win_rate_below_50():
-    assert "⚠️ win rate ต่ำกว่า 50%" in notify.fmt_stats(stats(10, 40.0, 0.3))
-    assert "⚠️" not in notify.fmt_stats(stats(10, 60.0, 0.3))
-    assert "⚠️" not in notify.fmt_stats(stats(2, 0.0, -1.0))  # too few trades to judge
+def test_status_line_when_win_rate_above_50():
+    assert "✅ win rate เกิน 50%" in notify.fmt_stats(stats(10, 60.0, 0.3))
+    assert "✅" not in notify.fmt_stats(stats(10, 50.0, 0.3))  # must be above, not equal
+    assert "✅" not in notify.fmt_stats(stats(2, 100.0, 1.0))  # too few trades to judge
+
+
+def test_alert_only_on_the_trade_that_crosses_above_50():
+    assert notify.winrate_alert(stats(5, 40.0, 0), stats(6, 50.0, 0)) == ""
+    assert notify.winrate_alert(stats(6, 50.0, 0), stats(7, 57.1, 0)).startswith("🎉 win rate เกิน 50%")
+    assert notify.winrate_alert(stats(7, 57.1, 0), stats(8, 62.5, 0)) == ""  # already above: no repeat
+    assert notify.winrate_alert(stats(4, 100.0, 0), stats(5, 100.0, 0)) != ""  # reached min trades
+
+
+def test_crossing_alert_end_to_end(setup):
+    client, sent = setup
+    # lose 1, win 4 -> after the 5th trade win rate is 80% with 5 trades: alert once
+    prices = [29, 33, 33, 33, 33, 33]
+    for i, exit_price in enumerate(prices):
+        client.post("/webhook/tradingview", json=alert("BUY", time=f"b{i}"))
+        client.post("/webhook/tradingview", json=alert("SELL", price=exit_price, time=f"s{i}"))
+    sells = [m for m in sent if "ขาย" in m]
+    assert [m.startswith("🎉") for m in sells] == [False, False, False, False, True, False]
 
 
 def test_warns_when_expectancy_not_positive():
